@@ -18,17 +18,34 @@ macOS only.
 
 ## Install
 
+With Homebrew, from the local tap in `../homebrew-attic`:
+
+```sh
+brew tap sergiommarcial/attic ../homebrew-attic
+brew install sergiommarcial/attic/attic
+brew services start attic     # the background service, now and at login
+```
+
+`brew upgrade attic` picks up a new version once the tap's formula points at
+it (see the tap's README). With a Homebrew install, `attic install` refuses
+and points to `brew services`, so the service never runs twice.
+
+Without Homebrew:
+
 ```sh
 make install          # builds and installs attic into ~/.cargo/bin
 attic install         # starts the background service, now and at login
 ```
 
 Then give the installed binary Full Disk Access (System Settings, Privacy &
-Security, Full Disk Access, add `~/.cargo/bin/attic`). Without it, macOS
+Security, Full Disk Access): `~/.cargo/bin/attic`, or for Homebrew the real
+file in `$(brew --prefix)/Cellar/attic/<version>/bin/attic`, which `attic
+status` prints. A Homebrew upgrade installs a new file, so grant it again. Without it, macOS
 hides some folders (Mail, Messages, parts of `~/Library`); attic lists the
 ones it could not read in `attic status` and in the app (press `u`), and
-leaves them out of the totals. After granting access, run `attic install`
-again: the restarted service rereads those folders. Rebuilding the binary can
+leaves them out of the totals. After granting access, restart the service
+(`attic install` again, or `brew services restart attic`): it rereads those
+folders. Rebuilding the binary can
 drop the grant, so re-check it after `make install`.
 
 The first scan of a large home folder takes a few minutes. The app shows its
@@ -102,10 +119,15 @@ scanned, removed roots and newly excluded folders dropped.
 - `~/Library/Application Support/attic/attic.db`: what the scans found.
   Deleting it makes the next start rescan.
 - `~/Library/LaunchAgents/local.attic.daemon.plist`: the service's launchd
-  entry, written by `attic install`.
-- `~/Library/Logs/attic/`: the service's output.
+  entry, written by `attic install` (Homebrew's is
+  `homebrew.mxcl.attic.plist`, written by `brew services`).
+- `~/Library/Logs/attic/`: the service's output (Homebrew:
+  `$(brew --prefix)/var/log/attic.log`).
 
 ## Uninstall
+
+With Homebrew: `brew services stop attic`, `brew uninstall attic`,
+`brew untap sergiommarcial/attic`, then remove the data folders below. Otherwise:
 
 ```sh
 attic uninstall

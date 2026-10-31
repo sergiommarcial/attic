@@ -11,6 +11,10 @@ use crate::commands::full_disk_access_hint;
 /// The agent's launchd label.
 pub const LABEL: &str = "local.attic.daemon";
 
+/// The labels the service may run under: `attic install`'s, and the one
+/// `brew services` gives it.
+pub const SERVICE_LABELS: [&str; 2] = [LABEL, "homebrew.mxcl.attic"];
+
 const BOOTSTRAP_ATTEMPTS: u32 = 5;
 const BOOTSTRAP_DELAY: Duration = Duration::from_millis(500);
 
@@ -84,6 +88,27 @@ pub fn plist_path(launch_agents: &Path) -> PathBuf {
     launch_agents.join(format!("{LABEL}.plist"))
 }
 
+/// Whether `exe` was installed by Homebrew (its real path is in a Cellar).
+pub fn is_homebrew(exe: &Path) -> bool {
+    exe.components().any(|c| c.as_os_str() == "Cellar")
+}
+
+/// A Homebrew install runs its service through `brew services`; a second
+/// agent from `attic install` would run the service twice.
+///
+/// # Errors
+///
+/// [`AtticError::Command`] for a binary inside a Homebrew Cellar.
+pub fn refuse_homebrew(exe: &Path) -> Result<()> {
+    if is_homebrew(exe) {
+        return Err(AtticError::Command {
+            program: "install".into(),
+            message: "attic was installed with Homebrew; start the service with `brew services start attic`".into(),
+        });
+    }
+    Ok(())
+}
+
 /// Whether `exe` is a cargo build output, which a rebuild replaces (and
 /// may lose its Full Disk Access grant with).
 pub fn is_build_output(exe: &Path) -> bool {
@@ -100,6 +125,7 @@ pub fn install(paths: &Paths) -> Result<()> {
     let exe = std::env::current_exe()
         .and_then(|p| p.canonicalize())
         .map_err(|e| AtticError::io("current executable", e))?;
+    refuse_homebrew(&exe)?;
     if is_build_output(&exe) {
         eprintln!(
             "attic: warning: installing {} from a build folder; a rebuild may drop its Full Disk Access. `make install` first, then run the installed attic.",
@@ -241,6 +267,36 @@ mod tests {
             plist_path(Path::new("/h/Library/LaunchAgents")),
             Path::new("/h/Library/LaunchAgents/local.attic.daemon.plist")
         );
+    }
+
+    #[test]
+    fn homebrew_installs_are_noticed() {
+        assert!(is_homebrew(Path::new(
+            "/opt/homebrew/Cellar/attic/0.1.0/bin/attic"
+        )));
+        assert!(is_homebrew(Path::new(
+            "/usr/local/Cellar/attic/0.1.0/bin/attic"
+        )));
+        assert!(!is_homebrew(Path::new("/Users/me/.cargo/bin/attic")));
+    }
+
+    #[test]
+    fn both_service_names_count_as_the_service() {
+        assert_eq!(
+            SERVICE_LABELS,
+            ["local.attic.daemon", "homebrew.mxcl.attic"]
+        );
+    }
+
+    #[test]
+    fn install_points_homebrew_users_to_brew_services() {
+        let err =
+            refuse_homebrew(Path::new("/opt/homebrew/Cellar/attic/0.1.0/bin/attic")).unwrap_err();
+        assert!(
+            err.to_string().contains("brew services start attic"),
+            "{err}"
+        );
+        assert!(refuse_homebrew(Path::new("/Users/me/.cargo/bin/attic")).is_ok());
     }
 
     #[test]

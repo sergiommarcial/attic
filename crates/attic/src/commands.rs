@@ -15,7 +15,7 @@ use attic_core::store::Store;
 use attic_core::units::{age, human};
 use attic_core::{AtticError, Paths, Result};
 
-use crate::launchd::LABEL;
+use crate::launchd::{SERVICE_LABELS, is_homebrew};
 use crate::tui::ui::display_path;
 
 /// How long FSEvents gathers events into one batch.
@@ -123,19 +123,27 @@ fn ago(at: i64) -> String {
 }
 
 pub fn agent_loaded() -> bool {
-    let target = format!("gui/{}/{LABEL}", unsafe { libc::getuid() });
-    Command::new("launchctl")
-        .args(["print", &target])
-        .output()
-        .is_ok_and(|o| o.status.success())
+    let uid = unsafe { libc::getuid() };
+    SERVICE_LABELS.iter().any(|label| {
+        Command::new("launchctl")
+            .args(["print", &format!("gui/{uid}/{label}")])
+            .output()
+            .is_ok_and(|o| o.status.success())
+    })
 }
 
 pub fn full_disk_access_hint() -> String {
-    let exe = std::env::current_exe()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "attic".into());
+    let exe = std::env::current_exe().and_then(|p| p.canonicalize());
+    let shown = exe
+        .as_ref()
+        .map_or_else(|_| "attic".into(), |p| p.display().to_string());
+    let again = if exe.as_deref().is_ok_and(is_homebrew) {
+        " Each `brew upgrade` installs a new binary, so grant it again after upgrading."
+    } else {
+        ""
+    };
     format!(
-        "Grant Full Disk Access to {exe} in System Settings, Privacy & Security, Full Disk Access."
+        "Grant Full Disk Access to {shown} in System Settings, Privacy & Security, Full Disk Access.{again}"
     )
 }
 
