@@ -25,3 +25,7 @@ rustc-ice-*.txt
 
 # Local agent instructions, kept out of the repo
 CLAUDE.md
+
+# Local design notes and agent working files, kept out of the repo
+docs/superpowers/
+.superpowers/
