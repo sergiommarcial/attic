@@ -1,5 +1,7 @@
 # attic
 
+[![ci](https://github.com/sergiommarcial/attic/actions/workflows/ci.yml/badge.svg)](https://github.com/sergiommarcial/attic/actions/workflows/ci.yml)
+
 attic shows where your Mac's disk space went and helps you get it back. It
 lists the largest and least recently used folders and files, suggests what
 to clean, and moves what you pick to the Trash. Everything stays on your
@@ -18,18 +20,35 @@ macOS only.
 
 ## Install
 
+With Homebrew:
+
+```sh
+brew tap sergiommarcial/attic
+brew trust sergiommarcial/attic   # Homebrew asks you to trust third-party taps
+brew install sergiommarcial/attic/attic
+brew services start attic         # the background service, now and at login
+```
+
+Homebrew builds attic from source, so the first install takes a few minutes.
+With a Homebrew install, `attic install` refuses and points to
+`brew services`, so the service never runs twice.
+
+From a clone of this repo:
+
 ```sh
 make install          # builds and installs attic into ~/.cargo/bin
 attic install         # starts the background service, now and at login
 ```
 
-Then give `~/.cargo/bin/attic` Full Disk Access (System Settings, Privacy &
-Security, Full Disk Access). Without it, macOS hides some folders (Mail,
-Messages, parts of `~/Library`); attic lists the ones it could not read in
-`attic status` and in the app (press `u`), and leaves them out of the totals.
-After granting access, run `attic install` again to restart the service: it
-rereads those folders. Rebuilding the binary can drop the grant, so re-check
-it after `make install`.
+Then give the binary Full Disk Access (System Settings, Privacy & Security,
+Full Disk Access): `~/.cargo/bin/attic`, or with Homebrew the path `attic
+status` shows. Grant it again after each `brew upgrade attic`. Without it,
+macOS hides some folders (Mail, Messages, parts of `~/Library`); attic lists
+the ones it could not read in `attic status` and in the app (press `u`), and
+leaves them out of the totals. After granting access, restart the service
+(`attic install` again, or `brew services restart attic`): it rereads those
+folders. Rebuilding the binary can drop the grant, so re-check it after
+`make install`.
 
 The first scan of a large home folder takes a few minutes. The app shows its
 progress.
@@ -109,6 +128,10 @@ scanned, removed roots and newly excluded folders dropped.
 
 ## Uninstall
 
+With Homebrew: `brew services stop attic`, `brew uninstall attic`,
+`brew untap sergiommarcial/attic`, then remove the data folders below and
+`$(brew --prefix)/var/log/attic.log`. Otherwise:
+
 ```sh
 attic uninstall
 rm -rf ~/Library/Application\ Support/attic ~/Library/Logs/attic ~/.config/attic
@@ -118,5 +141,15 @@ cargo uninstall attic
 ## Development
 
 `make help` lists the targets; `make ci` runs formatting, clippy, the tests,
-cargo-deny and cargo-machete. Tests never touch your real home folder or
-Trash. Design decisions are in `docs/adr/`.
+the release script tests, actionlint, shellcheck, cargo-deny and
+cargo-machete (`make install-tools` installs the tools). GitHub Actions runs
+the same checks on every push and pull request. Tests never touch your real
+home folder or Trash. Design decisions are in `docs/adr/`.
+
+### Releasing
+
+Bump `version` in `Cargo.toml` and run `cargo check` so `Cargo.lock` follows,
+commit both and push to `main`, then push a tag `vX.Y.Z` matching it. The
+release workflow checks the tag, runs the checks, creates the GitHub release
+and updates the formula in
+[homebrew-attic](https://github.com/sergiommarcial/homebrew-attic).

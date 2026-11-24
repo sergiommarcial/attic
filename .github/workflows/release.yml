@@ -1,0 +1,84 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    if: github.repository == 'sergiommarcial/attic'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - run: sh scripts/check-tag.sh "$GITHUB_REF_NAME"
+      - name: Check the tag is on main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::tag $GITHUB_REF_NAME points at a commit that is not on main"
+            exit 1
+          fi
+      - name: Check the tap token
+        env:
+          TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN is not set; add it under Settings, Secrets and variables, Actions"
+            exit 1
+          fi
+          # Proves the token can read the tap; write access is only proven by the push.
+          if ! git ls-remote "https://x-access-token:$TOKEN@github.com/sergiommarcial/homebrew-attic.git" > /dev/null; then
+            echo "::error::HOMEBREW_TAP_TOKEN can't read sergiommarcial/homebrew-attic; it may be expired or scoped to another repo"
+            exit 1
+          fi
+
+  checks:
+    needs: tag
+    uses: ./.github/workflows/checks.yml
+
+  release:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # A rerun after a failed tap push finds the release already there.
+      - run: gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" --generate-notes --verify-tag
+      - name: Hash the source tarball
+        id: tarball
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/src.tar.gz" "https://github.com/sergiommarcial/attic/archive/refs/tags/$TAG.tar.gz"
+          echo "sha256=$(sha256sum "$RUNNER_TEMP/src.tar.gz" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: sergiommarcial/homebrew-attic
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - name: Update the tap
+        env:
+          SHA256: ${{ steps.tarball.outputs.sha256 }}
+        run: |
+          mkdir -p tap/Formula
+          sh scripts/render-formula.sh "$TAG" "$SHA256" > tap/Formula/attic.rb
+          cd tap
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "formula already at $TAG"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/attic.rb
+          git commit -m "attic ${TAG#v}"
+          git push
