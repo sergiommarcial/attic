@@ -8,7 +8,8 @@ license = "MIT"
 publish = false
 
 # Its own workspace, so building attic never builds the benchmarks and the
-# main Cargo.lock doesn't carry their dependencies.
+# main Cargo.lock doesn't carry their dependencies. benches/Cargo.lock is
+# generated from the root one (compare.py --sync-lock), not committed.
 [workspace]
 
 [dependencies]
