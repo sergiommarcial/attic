@@ -21,4 +21,4 @@ jobs:
           tool: cargo-deny,cargo-machete
       - run: brew install actionlint shellcheck
       # The ci target's prerequisites, spelled out so install-tools' cargo install isn't needed.
-      - run: make fmt-check clippy test test-scripts check-demos check-formula lint-ci deny machete
+      - run: make fmt-check clippy test test-scripts check-demos check-benches check-formula lint-ci deny machete

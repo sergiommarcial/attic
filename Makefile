@@ -6,7 +6,7 @@ export RUSTUP_TOOLCHAIN ?= stable
 
 TESTS ?=
 
-.PHONY: help build test test-fast test-scripts check-demos demos check-formula clippy fmt fmt-check deny machete lint-ci ci install install-tools
+.PHONY: help build test test-fast test-scripts check-demos demos check-benches bench check-formula clippy fmt fmt-check deny machete lint-ci ci install install-tools
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -30,6 +30,14 @@ check-demos: ## Check the README demos still say what the app says
 demos: ## Regenerate the README demo SVGs and GIFs (macOS: needs magick and ffmpeg); SCENE=3 for one
 	python3 scripts/demos/render.py docs/media $(SCENE)
 
+check-benches: ## Format, lint and test the benchmark programs
+	cargo fmt --manifest-path benches/Cargo.toml --check
+	cargo clippy --manifest-path benches/Cargo.toml --all-targets --locked --target-dir target -- -D warnings
+	python3 -m unittest discover -s benches -p 'test_*.py'
+
+bench: ## Measure speed on synthetic trees; BASE=origin/main compares against a ref
+	python3 benches/compare.py $(BASE) $(ARGS)
+
 check-formula: ## Style and audit the Homebrew formula in a throwaway tap
 	sh scripts/check-formula.sh
 
@@ -52,7 +60,7 @@ lint-ci: ## Lint the workflows and scripts
 	actionlint
 	shellcheck scripts/*.sh
 
-ci: fmt-check clippy test test-scripts check-demos check-formula lint-ci deny machete ## What CI would run
+ci: fmt-check clippy test test-scripts check-demos check-benches check-formula lint-ci deny machete ## What CI would run
 
 install: ## Install the attic binary into ~/.cargo/bin
 	cargo install --path crates/attic --locked
