@@ -7,3 +7,4 @@
 | [ADR-003](ADR-003-suggestion-selection.md) | How suggestions are picked and counted | Accepted |
 | [ADR-004](ADR-004-releases-and-homebrew.md) | Tag-driven releases; CI writes the Homebrew formula into a public tap | Accepted |
 | [ADR-005](ADR-005-coalescing-rescans.md) | Rescans of a busy folder are coalesced: once it is quiet, or once a minute | Accepted |
+| [ADR-006](ADR-006-stat-on-worker-threads.md) | File metadata is read on the walker's worker threads, not in the consuming loop | Accepted |

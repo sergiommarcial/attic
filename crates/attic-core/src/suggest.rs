@@ -31,7 +31,7 @@ const REBUILDABLE_NAMES: [&str; 3] = ["node_modules", ".venv", "__pycache__"];
 /// Why a suggestion needs a second confirmation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Warning {
-    /// Holds a git repository with uncommitted or unpushed work.
+    /// Holds a git repository with uncommitted, stashed or unpushed work.
     UnsavedRepo,
     /// A macOS library (Photos, Mail, Messages) or something inside one.
     LibraryBundle,
