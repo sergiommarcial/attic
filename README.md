@@ -228,10 +228,16 @@ cargo uninstall attic
 ## Development
 
 `make help` lists the targets; `make ci` runs formatting, clippy, the tests,
-the release script tests, the benchmark checks, actionlint, shellcheck,
-cargo-deny and cargo-machete (`make install-tools` installs the tools). GitHub Actions runs
-the same checks on every push and pull request. Tests never touch your real
-home folder or Trash. Design decisions are in `docs/adr/`.
+the release script tests, the demo and benchmark checks, actionlint,
+shellcheck, cargo-deny and cargo-machete (`make install-tools` installs the
+tools). GitHub Actions runs the same checks on every push and pull request.
+Tests never touch your real home folder or Trash. Design decisions are in
+`docs/adr/`.
+
+The demos at the top of this page are drawn by `scripts/demos/` from made-up
+data. `make check-demos` (part of `make ci`) fails when a demo's text no
+longer matches the app, and `make demos` redraws them (macOS, needs
+ImageMagick and ffmpeg).
 
 `make bench` measures speed on synthetic trees in a temp folder, and
 `make bench BASE=origin/main` compares the current code against another git
