@@ -394,7 +394,8 @@ impl Tx<'_> {
 
     /// Replaces `root` and everything below it with `entries` (which should
     /// include `root` itself), and moves the totals of the folders above
-    /// `root` by the difference.
+    /// `root` by the difference. Their newest change time rises to `root`'s
+    /// if it is later.
     ///
     /// # Errors
     ///
@@ -402,18 +403,19 @@ impl Tx<'_> {
     pub fn replace_subtree(&self, root: &Path, entries: &[Entry]) -> Result<()> {
         let (old_size, old_files) = self.totals(root)?;
         self.delete_subtree(root)?;
-        let mut new = (0, 0);
+        let mut new = (0, 0, 0);
         for e in entries {
             if e.path == root {
-                new = (e.size as i64, e.files as i64);
+                new = (e.size as i64, e.files as i64, e.newest_mtime);
             }
             self.insert(e)?;
         }
-        self.add_to_ancestors(root, new.0 - old_size, new.1 - old_files)
+        self.add_to_ancestors(root, new.0 - old_size, new.1 - old_files, new.2)
     }
 
     /// Writes one row, leaving the rows below it alone, and moves the
-    /// totals of the folders above by the difference.
+    /// totals of the folders above by the difference. Their newest change
+    /// time rises to the row's if it is later.
     ///
     /// # Errors
     ///
@@ -425,6 +427,7 @@ impl Tx<'_> {
             &entry.path,
             entry.size as i64 - old_size,
             entry.files as i64 - old_files,
+            entry.newest_mtime,
         )
     }
 
@@ -454,7 +457,9 @@ impl Tx<'_> {
     }
 
     /// Deletes `path` and everything below it, takes its size off the
-    /// folders above, and returns the bytes removed (0 if it had no row).
+    /// folders above, and returns the bytes removed (0 if it had no row). The
+    /// folders above keep their newest change time: a removal changes its
+    /// own folder's time, and a time that is too new only delays a cleanup.
     ///
     /// # Errors
     ///
@@ -462,7 +467,7 @@ impl Tx<'_> {
     pub fn remove_subtree(&self, path: &Path) -> Result<u64> {
         let (size, files) = self.totals(path)?;
         self.delete_subtree(path)?;
-        self.add_to_ancestors(path, -size, -files)?;
+        self.add_to_ancestors(path, -size, -files, 0)?;
         Ok(size as u64)
     }
 
@@ -487,15 +492,17 @@ impl Tx<'_> {
         Ok(())
     }
 
-    fn add_to_ancestors(&self, path: &Path, size: i64, files: i64) -> Result<()> {
-        if size == 0 && files == 0 {
+    fn add_to_ancestors(&self, path: &Path, size: i64, files: i64, newest: i64) -> Result<()> {
+        if size == 0 && files == 0 && newest == 0 {
             return Ok(());
         }
         let mut update = self.conn.prepare_cached(
-            "UPDATE entries SET size = size + ?1, files = files + ?2 WHERE path = ?3",
+            "UPDATE entries
+             SET size = size + ?1, files = files + ?2, newest_mtime = MAX(newest_mtime, ?3)
+             WHERE path = ?4",
         )?;
         for ancestor in path.ancestors().skip(1) {
-            update.execute(params![size, files, bytes(ancestor)])?;
+            update.execute(params![size, files, newest, bytes(ancestor)])?;
         }
         Ok(())
     }

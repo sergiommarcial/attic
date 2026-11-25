@@ -7,7 +7,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use attic_core::events::LAST_EVENT_ID;
-use attic_core::fsevents::FsEventSource;
+use attic_core::fsevents::{FsEventSource, current_event_id};
 use attic_core::notify::OsascriptNotifier;
 use attic_core::scan::{full_scan, now};
 use attic_core::service::{Service, load_config, roots};
@@ -21,14 +21,26 @@ use crate::tui::ui::display_path;
 /// How long FSEvents gathers events into one batch.
 const LATENCY: Duration = Duration::from_secs(5);
 
+/// The event id to resume from. A first start stores the system's current id
+/// first, so a stored id always exists and the service's pending folders
+/// always have a floor to replay from.
+fn resume_id(store: &mut Store) -> Result<u64> {
+    if let Some(id) = store.meta(LAST_EVENT_ID)?.and_then(|v| v.parse().ok()) {
+        return Ok(id);
+    }
+    let id = current_event_id();
+    store.set_meta(LAST_EVENT_ID, &id.to_string())?;
+    Ok(id)
+}
+
 pub fn daemon(paths: &Paths) -> Result<()> {
     // Background work: let everything else on the machine go first.
     unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, 10) };
-    let store = Store::open(&paths.db)?;
+    let mut store = Store::open(&paths.db)?;
     let cfg = load_config(paths);
-    let since = store.meta(LAST_EVENT_ID)?.and_then(|v| v.parse().ok());
+    let since = resume_id(&mut store)?;
     // Started before the first scan, so changes made during it are queued.
-    let events = FsEventSource::start(&roots(&cfg, &paths.home), since, LATENCY)?;
+    let events = FsEventSource::start(&roots(&cfg, &paths.home), Some(since), LATENCY)?;
     let notifier = OsascriptNotifier;
     let clock = now;
     Service::new(store, paths.clone(), Box::new(events), &notifier, &clock)?.run()?;
@@ -162,6 +174,25 @@ mod tests {
             "{err}"
         );
         assert!(!paths.db.exists(), "nothing was written");
+    }
+
+    #[test]
+    fn a_first_start_stores_the_streams_current_event_id() {
+        let mut store = Store::open_in_memory().unwrap();
+        let id = resume_id(&mut store).unwrap();
+        assert!(id > 0);
+        assert_eq!(
+            store.meta(LAST_EVENT_ID).unwrap().as_deref(),
+            Some(id.to_string().as_str())
+        );
+    }
+
+    #[test]
+    fn a_stored_event_id_is_kept() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.set_meta(LAST_EVENT_ID, "1234").unwrap();
+        assert_eq!(resume_id(&mut store).unwrap(), 1234);
+        assert_eq!(store.meta(LAST_EVENT_ID).unwrap().as_deref(), Some("1234"));
     }
 
     #[test]

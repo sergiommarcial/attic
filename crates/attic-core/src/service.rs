@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::apply::apply_batch;
-use crate::events::EventSource;
+use crate::events::{EventSource, LAST_EVENT_ID};
 use crate::notify::{Notifier, message, should_notify};
+use crate::pending::Pending;
 use crate::probe::NoProbe;
 use crate::scan::{full_scan, scan_subtree};
 use crate::store::Store;
@@ -36,6 +37,7 @@ pub struct Service<'a> {
     events: Box<dyn EventSource + 'a>,
     notifier: &'a dyn Notifier,
     clock: &'a dyn Fn() -> i64,
+    pending: Pending,
     last_refresh: Option<i64>,
     changed: bool,
 }
@@ -46,7 +48,7 @@ impl<'a> Service<'a> {
     ///
     /// # Errors
     ///
-    /// None today; kept fallible for the store's sake.
+    /// [`crate::AtticError::Db`] when reading the stored event id fails.
     pub fn new(
         store: Store,
         paths: Paths,
@@ -56,6 +58,10 @@ impl<'a> Service<'a> {
     ) -> Result<Self> {
         let cfg = load_config(&paths);
         let roots = roots(&cfg, &paths.home);
+        let stored_id = store
+            .meta(LAST_EVENT_ID)?
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
         Ok(Service {
             store,
             paths,
@@ -64,6 +70,7 @@ impl<'a> Service<'a> {
             events,
             notifier,
             clock,
+            pending: Pending::new(stored_id),
             last_refresh: None,
             changed: true,
         })
@@ -118,30 +125,52 @@ impl<'a> Service<'a> {
         Ok(())
     }
 
-    /// Applies at most one batch of events (waiting up to `timeout`), then
+    /// Takes at most one batch of events (waiting up to `timeout`, less when
+    /// a folder is about to be due), applies the folders that have been
+    /// quiet long enough or have waited a minute (see [`Pending`]), then
     /// refreshes the notification state if something changed and a minute
-    /// has passed.
+    /// has passed. A batch with lost history and one that touches the config
+    /// folder are applied at once.
     ///
     /// # Errors
     ///
     /// When the event source or the store fails.
     pub fn step(&mut self, timeout: Duration) -> Result<Flow> {
-        if let Some(batch) = self.events.next_batch(timeout)? {
+        let wait = self
+            .pending
+            .wait((self.clock)())
+            .map_or(timeout, |w| w.min(timeout));
+        let mut touches_config = false;
+        if let Some(batch) = self.events.next_batch(wait)? {
             let config_dir = self.paths.config.parent();
-            let touches_config = batch
+            touches_config = batch
                 .changes
                 .iter()
                 .any(|c| Some(c.dir.as_path()) == config_dir);
-            apply_batch(&mut self.store, &self.roots, &batch, &self.cfg)?;
-            self.changed = true;
-            if touches_config {
-                if self.reload_config() {
-                    return Ok(Flow::Restart);
-                }
-                self.reconcile()?;
+            if batch.history_lost {
+                self.pending.clear(batch.last_id);
+                apply_batch(&mut self.store, &self.roots, &batch, &self.cfg)?;
+                self.changed = true;
+            } else {
+                self.pending.add(&batch, (self.clock)());
             }
         }
         let now = (self.clock)();
+        let due = if touches_config {
+            self.pending.take_all()
+        } else {
+            self.pending.take_due(now)
+        };
+        if let Some(batch) = due {
+            apply_batch(&mut self.store, &self.roots, &batch, &self.cfg)?;
+            self.changed = true;
+        }
+        if touches_config {
+            if self.reload_config() {
+                return Ok(Flow::Restart);
+            }
+            self.reconcile()?;
+        }
         // Nothing changed, nothing to recompute: an idle machine costs no
         // queries.
         if self.changed && self.last_refresh.is_none_or(|t| now - t >= REFRESH_EVERY) {

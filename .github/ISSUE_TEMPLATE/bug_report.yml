@@ -1,0 +1,55 @@
+name: Bug report
+description: Something in attic doesn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Paths in logs can name your projects and people. Replace anything you
+        don't want public before posting. For a bug that could move or delete
+        the wrong files, please use a private security report instead (see
+        SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: attic version
+      description: Output of `attic --version`
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you installed it
+      options:
+        - Homebrew
+        - make install (from a clone)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `attic status`
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: Service log
+      description: "The last lines of `~/Library/Logs/attic/daemon.err.log`, or with Homebrew `$(brew --prefix)/var/log/attic.log`"
+      render: text

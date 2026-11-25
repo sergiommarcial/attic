@@ -6,7 +6,7 @@ pub mod ui;
 use std::time::Duration;
 
 use attic_core::disk;
-use attic_core::events::LAST_EVENT_ID;
+use attic_core::events::{APPLIED_BATCHES, LAST_EVENT_ID};
 use attic_core::probe::{CachedProbe, SystemProbe};
 use attic_core::scan::now;
 use attic_core::service::{load_config, roots};
@@ -92,9 +92,10 @@ pub fn run(paths: &Paths) -> Result<()> {
 }
 
 /// Changes whenever the service has written something worth redrawing.
-fn stamp(store: &Store) -> Result<[Option<String>; 3]> {
+fn stamp(store: &Store) -> Result<[Option<String>; 4]> {
     Ok([
         store.meta(LAST_EVENT_ID)?,
+        store.meta(APPLIED_BATCHES)?,
         store.meta("full_scan_done_at")?,
         store.meta("scan_progress")?,
     ])

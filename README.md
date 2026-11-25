@@ -100,6 +100,10 @@ The service sends at most one notification a day, once the space you could
 free reaches 5 GB and has grown by 5 GB since the last notification (or since
 you last cleaned up). Clicking it does nothing yet; run `attic` to review.
 
+The service waits for a changing folder to go quiet before it reads it again,
+so sizes can trail the disk by about 5 seconds, and by up to a minute for a
+folder that never stops changing (a build in progress, say).
+
 ## Config
 
 `~/.config/attic/config.toml` is optional. Every key has a default:
@@ -121,10 +125,14 @@ scanned, removed roots and newly excluded folders dropped.
 - `~/Library/Application Support/attic/attic.db`: what the scans found.
   Deleting it makes the next start rescan.
 - `~/Library/LaunchAgents/local.attic.daemon.plist`: the service's launchd
-  entry, written by `attic install` (Homebrew's is
-  `homebrew.mxcl.attic.plist`, written by `brew services`).
+  entry, written by `attic install` (Homebrew's is `sh.brew.attic.plist`,
+  or `homebrew.mxcl.attic.plist` before Homebrew 7, written by `brew
+  services`).
 - `~/Library/Logs/attic/`: the service's output (Homebrew:
-  `$(brew --prefix)/var/log/attic.log`).
+  `$(brew --prefix)/var/log/attic.log`). A rescan of a folder that takes
+  0.2 seconds or more is logged with its path, and so is a full rescan after
+  macOS lost file system events, so a folder that keeps the service busy
+  shows up there.
 
 ## Uninstall
 
@@ -153,3 +161,13 @@ commit both and push to `main`, then push a tag `vX.Y.Z` matching it. The
 release workflow checks the tag, runs the checks, creates the GitHub release
 and updates the formula in
 [homebrew-attic](https://github.com/sergiommarcial/homebrew-attic).
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. To
+report a vulnerability, follow [SECURITY.md](SECURITY.md) instead of opening
+a public issue.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

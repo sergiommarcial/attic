@@ -58,6 +58,7 @@ unsafe extern "C" {
     fn FSEventStreamStop(stream: StreamRef);
     fn FSEventStreamInvalidate(stream: StreamRef);
     fn FSEventStreamRelease(stream: StreamRef);
+    fn FSEventsGetCurrentEventId() -> u64;
 }
 
 const SINCE_NOW: u64 = u64::MAX;
@@ -69,6 +70,13 @@ const EVENT_IDS_WRAPPED: u32 = 0x08;
 const HISTORY_DONE: u32 = 0x10;
 const ROOT_CHANGED: u32 = 0x20;
 const HISTORY_LOST: u32 = USER_DROPPED | KERNEL_DROPPED | EVENT_IDS_WRAPPED | ROOT_CHANGED;
+
+/// The id of the newest event the system has seen so far. A stream started
+/// "since" it delivers only what happens afterwards.
+pub fn current_event_id() -> u64 {
+    // SAFETY: takes no arguments and only reads a counter.
+    unsafe { FSEventsGetCurrentEventId() }
+}
 
 /// How often the stream's thread wakes to check whether it should stop.
 /// Dropping the source also stops the run loop directly, so this only

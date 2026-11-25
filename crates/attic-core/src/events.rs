@@ -9,6 +9,11 @@ use crate::Result;
 /// The `meta` key holding the id of the last file system event applied.
 pub const LAST_EVENT_ID: &str = "fsevents_last_id";
 
+/// The `meta` key counting the batches applied. The stored event id can stay
+/// the same across applies (it trails the oldest pending folder), so the
+/// terminal app watches this as well to know when to redraw.
+pub const APPLIED_BATCHES: &str = "applied_batches";
+
 /// A folder whose contents changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Change {

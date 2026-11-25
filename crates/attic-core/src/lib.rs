@@ -13,6 +13,7 @@ pub mod events;
 pub mod fsevents;
 pub mod notify;
 pub mod paths;
+pub mod pending;
 pub mod probe;
 pub mod scan;
 pub mod service;

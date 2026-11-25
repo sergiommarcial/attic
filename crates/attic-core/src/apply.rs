@@ -4,8 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
-use crate::events::{EventBatch, LAST_EVENT_ID};
+use crate::events::{APPLIED_BATCHES, EventBatch, LAST_EVENT_ID};
 use crate::scan::{file_size, scan_subtree, skipped_by};
 use crate::store::{Entry, Flags, Kind, Store, Tx};
 use crate::{Config, Result};
@@ -31,9 +32,16 @@ pub fn apply_batch(
 ) -> Result<()> {
     let last_id = batch.last_id.to_string();
     let plans = if batch.history_lost {
+        eprintln!("{}", history_lost_line(roots));
         roots
             .iter()
-            .map(|root| Ok(Plan::Replace(root.clone(), scan_subtree(root, cfg)?)))
+            .map(|root| {
+                let started = Instant::now();
+                let entries = scan_subtree(root, cfg)?;
+                let what = format!("root, {} entries", entries.len());
+                log_if_slow(root, &what, started.elapsed());
+                Ok(Plan::Replace(root.clone(), entries))
+            })
             .collect::<Result<Vec<_>>>()?
     } else {
         plan(store, roots, batch, cfg)?
@@ -42,7 +50,12 @@ pub fn apply_batch(
         for plan in &plans {
             plan.apply(tx)?;
         }
-        tx.set_meta(LAST_EVENT_ID, &last_id)
+        tx.set_meta(LAST_EVENT_ID, &last_id)?;
+        let applied = tx
+            .meta(APPLIED_BATCHES)?
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+        tx.set_meta(APPLIED_BATCHES, &(applied + 1).to_string())
     })
 }
 
@@ -64,12 +77,50 @@ fn plan(store: &Store, roots: &[PathBuf], batch: &EventBatch, cfg: &Config) -> R
         .map(|w| match w {
             Work::Remove(path) => Ok(Plan::Remove(path)),
             Work::Full(path) => {
+                let started = Instant::now();
                 let entries = scan_subtree(&path, cfg)?;
+                let what = format!("subtree, {} entries", entries.len());
+                log_if_slow(&path, &what, started.elapsed());
                 Ok(Plan::Replace(path, entries))
             }
-            Work::Shallow(path) => shallow(store, &path, cfg),
+            Work::Shallow(path) => {
+                let started = Instant::now();
+                let plan = shallow(store, &path, cfg);
+                log_if_slow(&path, "folder", started.elapsed());
+                plan
+            }
         })
         .collect()
+}
+
+/// A rescan at least this slow is written to the log, so a folder that
+/// keeps the service busy can be named.
+const SLOW_RESCAN: Duration = Duration::from_millis(200);
+
+fn slow_rescan_line(path: &Path, what: &str, elapsed: Duration) -> Option<String> {
+    (elapsed >= SLOW_RESCAN).then(|| {
+        format!(
+            "attic: slow rescan of {} ({what}) took {:.1}s",
+            path.display(),
+            elapsed.as_secs_f64()
+        )
+    })
+}
+
+/// Logged before a full rescan starts, so one that is still running can be
+/// told apart from an idle service.
+fn history_lost_line(roots: &[PathBuf]) -> String {
+    let names: Vec<_> = roots.iter().map(|r| r.display().to_string()).collect();
+    format!(
+        "attic: file system events were lost; rescanning {} in full",
+        names.join(", ")
+    )
+}
+
+fn log_if_slow(path: &Path, what: &str, elapsed: Duration) {
+    if let Some(line) = slow_rescan_line(path, what, elapsed) {
+        eprintln!("{line}");
+    }
 }
 
 enum Work {
@@ -300,4 +351,47 @@ fn shallow(store: &Store, dir: &Path, cfg: &Config) -> Result<Plan> {
     plan.remove
         .extend(existing.into_keys().filter(|p| !on_disk.contains(p)));
     Ok(Plan::Shallow(plan))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    use super::{history_lost_line, slow_rescan_line};
+
+    #[test]
+    fn a_quick_rescan_is_not_logged() {
+        let quick = Duration::from_millis(199);
+        assert_eq!(slow_rescan_line(Path::new("/a"), "folder", quick), None);
+    }
+
+    #[test]
+    fn a_slow_rescan_names_the_folder_what_was_read_and_how_long() {
+        let line = slow_rescan_line(
+            Path::new("/Users/me/repos/x/target"),
+            "subtree, 1234 entries",
+            Duration::from_millis(1840),
+        )
+        .unwrap();
+        assert_eq!(
+            line,
+            "attic: slow rescan of /Users/me/repos/x/target (subtree, 1234 entries) took 1.8s"
+        );
+    }
+
+    #[test]
+    fn lost_history_says_which_roots_are_rescanned_in_full() {
+        let roots = [PathBuf::from("/Users/me"), PathBuf::from("/Volumes/Data")];
+        assert_eq!(
+            history_lost_line(&roots),
+            "attic: file system events were lost; rescanning /Users/me, /Volumes/Data in full"
+        );
+    }
+
+    #[test]
+    fn the_threshold_itself_is_logged() {
+        let at = Duration::from_millis(200);
+        assert!(slow_rescan_line(Path::new("/a"), "folder", at).is_some());
+    }
 }

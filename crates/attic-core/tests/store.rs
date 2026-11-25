@@ -289,3 +289,38 @@ fn wal_file_is_size_limited() {
     let store = Store::open(&dir_.path().join("attic.db")).unwrap();
     assert_eq!(store.journal_size_limit().unwrap(), 64 * 1024 * 1024);
 }
+
+fn newest_of(store: &Store, path: &str) -> i64 {
+    store.get(Path::new(path)).unwrap().unwrap().newest_mtime
+}
+
+#[test]
+fn a_newer_row_raises_every_ancestors_newest_change_even_at_the_same_size() {
+    let mut store = seeded();
+    let mut newer = file("/h/a/b", 10);
+    newer.newest_mtime = 500;
+    store.transaction(|tx| tx.put_entry(&newer)).unwrap();
+    assert_eq!(newest_of(&store, "/h/a"), 500);
+    assert_eq!(newest_of(&store, "/h"), 500);
+}
+
+#[test]
+fn replacing_a_subtree_raises_the_newest_change_above_it() {
+    let mut store = seeded();
+    let mut root = dir("/h/a", 10, 1);
+    root.newest_mtime = 700;
+    store
+        .replace_subtree(Path::new("/h/a"), &[root, file("/h/a/b", 10)])
+        .unwrap();
+    assert_eq!(newest_of(&store, "/h"), 700);
+}
+
+#[test]
+fn removing_a_subtree_never_lowers_the_newest_change_above_it() {
+    let mut store = seeded();
+    let mut newer = file("/h/a/b", 10);
+    newer.newest_mtime = 500;
+    store.transaction(|tx| tx.put_entry(&newer)).unwrap();
+    store.remove_subtree(Path::new("/h/a/b")).unwrap();
+    assert_eq!(newest_of(&store, "/h"), 500, "stale-new is the safe side");
+}

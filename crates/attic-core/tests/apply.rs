@@ -1,6 +1,7 @@
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use attic_core::Config;
 use attic_core::apply::apply_batch;
@@ -209,6 +210,25 @@ fn hard_links_count_the_same_in_shallow_and_full_passes() {
         &mut store,
         &home,
         &batch(&[(&home, false), (&home.join("docs"), false)]),
+    );
+    assert_matches_disk(&store, &home);
+}
+
+#[test]
+fn a_file_changed_later_than_the_scan_updates_every_ancestors_newest_change() {
+    let (_d, home, mut store) = setup();
+    let path = home.join("docs/deep/late.bin");
+    write(&path, 300_000);
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(SystemTime::now() + Duration::from_secs(1000))
+        .unwrap();
+    apply(
+        &mut store,
+        &home,
+        &batch(&[(&home.join("docs/deep"), false)]),
     );
     assert_matches_disk(&store, &home);
 }

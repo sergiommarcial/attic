@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use attic_core::events::{EventBatch, EventSource};
-use attic_core::fsevents::FsEventSource;
+use attic_core::fsevents::{FsEventSource, current_event_id};
 
 fn temp() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
@@ -116,4 +116,11 @@ fn dropping_a_source_returns_promptly() {
         "{:?}",
         started.elapsed()
     );
+}
+
+#[test]
+fn the_current_event_id_is_positive_and_never_goes_backwards() {
+    let first = current_event_id();
+    assert!(first > 0);
+    assert!(current_event_id() >= first);
 }

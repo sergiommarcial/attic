@@ -4,10 +4,12 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use attic_core::events::{Change, EventBatch, ScriptedEvents};
+use attic_core::events::{Change, EventBatch, LAST_EVENT_ID, ScriptedEvents};
 use attic_core::notify::RecordingNotifier;
-use attic_core::service::{Flow, Service, roots};
-use attic_core::store::Store;
+use attic_core::pending::{MAX_WAIT, QUIET};
+use attic_core::scan::full_scan;
+use attic_core::service::{Flow, Service, load_config, roots};
+use attic_core::store::{Entry, Store};
 use attic_core::{Config, Paths};
 
 const T0: i64 = 2_000_000_000;
@@ -49,7 +51,8 @@ fn first_run_scans_then_applies_events() {
     write_old(&paths.home.join("docs/a.bin"), 600_000);
     config(&paths, r#"min_file_size = "100kB""#);
     let notifier = RecordingNotifier::default();
-    let clock = || T0;
+    let now = Cell::new(T0);
+    let clock = || now.get();
     let events = ScriptedEvents::new(vec![change(&paths.home.join("docs"), 9)]);
     let mut service = Service::new(
         Store::open(&paths.db).unwrap(),
@@ -61,6 +64,8 @@ fn first_run_scans_then_applies_events() {
     .unwrap();
     service.ensure_scanned().unwrap();
     write_old(&paths.home.join("docs/b.bin"), 300_000);
+    assert_eq!(service.step(Duration::ZERO).unwrap(), Flow::Continue);
+    now.set(T0 + QUIET);
     assert_eq!(service.step(Duration::ZERO).unwrap(), Flow::Continue);
 
     let store = Store::open(&paths.db).unwrap();
@@ -340,4 +345,281 @@ fn idle_minutes_do_not_recompute() {
     now.set(T0 + 600);
     s.step(Duration::ZERO).unwrap();
     assert!(notifier.sent().is_empty(), "no events, no recompute");
+}
+
+fn subtree(dir: &Path, id: u64) -> EventBatch {
+    EventBatch {
+        changes: vec![Change {
+            dir: dir.to_path_buf(),
+            subtree: true,
+        }],
+        last_id: id,
+        history_lost: false,
+    }
+}
+
+fn rows(store: &Store) -> Vec<Entry> {
+    let mut rows = store.all_entries().unwrap();
+    for r in &mut rows {
+        r.last_used = None;
+    }
+    rows
+}
+
+/// The store must equal a fresh scan of the disk with the service's config.
+fn assert_matches_disk(paths: &Paths) {
+    let cfg = load_config(paths);
+    let mut fresh = Store::open_in_memory().unwrap();
+    full_scan(&mut fresh, &roots(&cfg, &paths.home), &cfg, &mut |_| {}).unwrap();
+    assert_eq!(rows(&Store::open(&paths.db).unwrap()), rows(&fresh));
+}
+
+fn stored_id(paths: &Paths) -> Option<String> {
+    Store::open(&paths.db)
+        .unwrap()
+        .meta("fsevents_last_id")
+        .unwrap()
+}
+
+fn has(paths: &Paths, rel: &str) -> bool {
+    Store::open(&paths.db)
+        .unwrap()
+        .get(&paths.home.join(rel))
+        .unwrap()
+        .is_some()
+}
+
+const SMALL_CONFIG: &str = r#"min_file_size = "100kB""#;
+
+#[test]
+fn an_event_waits_until_the_folder_is_quiet() {
+    let (_d, paths) = home();
+    write_old(&paths.home.join("docs/a.bin"), 600_000);
+    config(&paths, SMALL_CONFIG);
+    let notifier = RecordingNotifier::default();
+    let now = Cell::new(T0);
+    let clock = || now.get();
+    let events = ScriptedEvents::new(vec![change(&paths.home.join("docs"), 9)]);
+    let mut s = service(&paths, &notifier, &clock, events);
+    s.ensure_scanned().unwrap();
+    write_old(&paths.home.join("docs/b.bin"), 300_000);
+    s.step(Duration::ZERO).unwrap();
+    assert!(!has(&paths, "docs/b.bin"));
+    now.set(T0 + QUIET - 1);
+    s.step(Duration::ZERO).unwrap();
+    assert!(!has(&paths, "docs/b.bin"));
+    now.set(T0 + QUIET);
+    s.step(Duration::ZERO).unwrap();
+    assert!(has(&paths, "docs/b.bin"));
+    assert_eq!(stored_id(&paths).as_deref(), Some("9"));
+}
+
+#[test]
+fn a_busy_folder_is_rescanned_at_the_maximum_wait() {
+    let (_d, paths) = home();
+    write_old(&paths.home.join("docs/a.bin"), 600_000);
+    config(&paths, SMALL_CONFIG);
+    let notifier = RecordingNotifier::default();
+    let now = Cell::new(T0);
+    let clock = || now.get();
+    let batches = (1..=70)
+        .map(|id| change(&paths.home.join("docs"), id))
+        .collect();
+    let mut s = service(&paths, &notifier, &clock, ScriptedEvents::new(batches));
+    s.ensure_scanned().unwrap();
+    write_old(&paths.home.join("docs/b.bin"), 300_000);
+    for t in 0..=64 {
+        now.set(T0 + t);
+        s.step(Duration::ZERO).unwrap();
+        assert_eq!(has(&paths, "docs/b.bin"), t >= MAX_WAIT, "at second {t}");
+    }
+}
+
+#[test]
+fn the_stored_id_never_passes_a_pending_folder() {
+    let (_d, paths) = home();
+    write_old(&paths.home.join("a/x.bin"), 600_000);
+    write_old(&paths.home.join("b/y.bin"), 600_000);
+    config(&paths, SMALL_CONFIG);
+    let notifier = RecordingNotifier::default();
+    let now = Cell::new(T0);
+    let clock = || now.get();
+    let events = ScriptedEvents::new(vec![
+        change(&paths.home.join("a"), 10),
+        change(&paths.home.join("b"), 20),
+    ]);
+    let mut s = service(&paths, &notifier, &clock, events);
+    s.ensure_scanned().unwrap();
+    s.step(Duration::ZERO).unwrap();
+    now.set(T0 + 4);
+    s.step(Duration::ZERO).unwrap();
+    now.set(T0 + QUIET);
+    s.step(Duration::ZERO).unwrap();
+    assert_eq!(stored_id(&paths).as_deref(), Some("10"));
+    now.set(T0 + 4 + QUIET);
+    s.step(Duration::ZERO).unwrap();
+    assert_eq!(stored_id(&paths).as_deref(), Some("20"));
+}
+
+#[test]
+fn lost_history_is_applied_at_once_and_clears_what_was_pending() {
+    let (_d, paths) = home();
+    write_old(&paths.home.join("docs/a.bin"), 600_000);
+    config(&paths, SMALL_CONFIG);
+    let notifier = RecordingNotifier::default();
+    let now = Cell::new(T0);
+    let clock = || now.get();
+    let lost = EventBatch {
+        changes: vec![],
+        last_id: 30,
+        history_lost: true,
+    };
+    let events = ScriptedEvents::new(vec![change(&paths.home.join("docs"), 5), lost]);
+    let mut s = service(&paths, &notifier, &clock, events);
+    s.ensure_scanned().unwrap();
+    s.step(Duration::ZERO).unwrap();
+    write_old(&paths.home.join("docs/c.bin"), 300_000);
+    write_old(&paths.home.join("other/x.bin"), 300_000);
+    s.step(Duration::ZERO).unwrap();
+    assert_matches_disk(&paths);
+    assert_eq!(stored_id(&paths).as_deref(), Some("30"));
+    write_old(&paths.home.join("docs/d.bin"), 300_000);
+    now.set(T0 + MAX_WAIT);
+    s.step(Duration::ZERO).unwrap();
+    assert!(!has(&paths, "docs/d.bin"), "the pending folder was dropped");
+}
+
+#[test]
+fn a_folder_deleted_while_pending_is_removed_when_due() {
+    let (_d, paths) = home();
+    write_old(&paths.home.join("docs/deep/a.bin"), 600_000);
+    config(&paths, SMALL_CONFIG);
+    let notifier = RecordingNotifier::default();
+    let now = Cell::new(T0);
+    let clock = || now.get();
+    let events = ScriptedEvents::new(vec![change(&paths.home.join("docs/deep"), 1)]);
+    let mut s = service(&paths, &notifier, &clock, events);
+    s.ensure_scanned().unwrap();
+    s.step(Duration::ZERO).unwrap();
+    fs::remove_dir_all(paths.home.join("docs/deep")).unwrap();
+    now.set(T0 + QUIET);
+    s.step(Duration::ZERO).unwrap();
+    assert!(!has(&paths, "docs/deep"));
+    assert!(!has(&paths, "docs/deep/a.bin"));
+}
+
+#[test]
+fn an_ancestor_and_a_descendant_due_at_different_times_match_a_fresh_scan() {
+    let (_d, paths) = home();
+    write_old(&paths.home.join("docs/a.bin"), 600_000);
+    write_old(&paths.home.join("docs/sub/s.bin"), 600_000);
+    config(&paths, SMALL_CONFIG);
+    let notifier = RecordingNotifier::default();
+    let now = Cell::new(T0);
+    let clock = || now.get();
+    let events = ScriptedEvents::new(vec![
+        subtree(&paths.home.join("docs"), 1),
+        change(&paths.home.join("docs/sub"), 2),
+    ]);
+    let mut s = service(&paths, &notifier, &clock, events);
+    s.ensure_scanned().unwrap();
+    write_old(&paths.home.join("docs/n.bin"), 300_000);
+    s.step(Duration::ZERO).unwrap();
+    write_old(&paths.home.join("docs/sub/m.bin"), 300_000);
+    now.set(T0 + 3);
+    s.step(Duration::ZERO).unwrap();
+    now.set(T0 + QUIET);
+    s.step(Duration::ZERO).unwrap();
+    assert_matches_disk(&paths);
+    now.set(T0 + 3 + QUIET);
+    s.step(Duration::ZERO).unwrap();
+    assert_matches_disk(&paths);
+}
+
+fn applied_batches(paths: &Paths) -> Option<String> {
+    Store::open(&paths.db)
+        .unwrap()
+        .meta("applied_batches")
+        .unwrap()
+}
+
+#[test]
+fn every_apply_leaves_a_mark_the_app_can_see_even_when_the_stored_id_stays() {
+    let (_d, paths) = home();
+    for dir in ["a", "b", "c"] {
+        write_old(&paths.home.join(dir).join("x.bin"), 600_000);
+    }
+    config(&paths, SMALL_CONFIG);
+    Store::open(&paths.db)
+        .unwrap()
+        .set_meta(LAST_EVENT_ID, "5")
+        .unwrap();
+    let notifier = RecordingNotifier::default();
+    let now = Cell::new(T0);
+    let clock = || now.get();
+    let events = ScriptedEvents::new(vec![
+        change(&paths.home.join("a"), 10),
+        change(&paths.home.join("c"), 20),
+        change(&paths.home.join("a"), 30),
+        change(&paths.home.join("b"), 40),
+        change(&paths.home.join("a"), 50),
+    ]);
+    let mut s = service(&paths, &notifier, &clock, events);
+    s.ensure_scanned().unwrap();
+    for t in 0..=4 {
+        now.set(T0 + t);
+        s.step(Duration::ZERO).unwrap();
+    }
+    now.set(T0 + 6);
+    s.step(Duration::ZERO).unwrap();
+    assert_eq!(stored_id(&paths).as_deref(), Some("5"));
+    let first = applied_batches(&paths);
+    assert!(first.is_some(), "the apply left no mark");
+    now.set(T0 + 8);
+    s.step(Duration::ZERO).unwrap();
+    assert_eq!(stored_id(&paths).as_deref(), Some("5"));
+    assert_ne!(applied_batches(&paths), first);
+}
+
+/// Two pending folders, due at different times, must leave the store equal
+/// to a fresh scan once both are applied (it is legitimately stale between).
+fn pair_matches_a_fresh_scan(batches: impl FnOnce(&Paths) -> (EventBatch, EventBatch)) {
+    let (_d, paths) = home();
+    write_old(&paths.home.join("docs/a.bin"), 600_000);
+    write_old(&paths.home.join("docs/sub/s.bin"), 600_000);
+    config(&paths, SMALL_CONFIG);
+    let (first, second) = batches(&paths);
+    let notifier = RecordingNotifier::default();
+    let now = Cell::new(T0);
+    let clock = || now.get();
+    let events = ScriptedEvents::new(vec![first, second]);
+    let mut s = service(&paths, &notifier, &clock, events);
+    s.ensure_scanned().unwrap();
+    write_old(&paths.home.join("docs/n.bin"), 300_000);
+    write_old(&paths.home.join("docs/sub/m.bin"), 300_000);
+    for t in [0, 3, QUIET, 3 + QUIET] {
+        now.set(T0 + t);
+        s.step(Duration::ZERO).unwrap();
+    }
+    assert_matches_disk(&paths);
+}
+
+#[test]
+fn a_descendant_subtree_due_first_then_its_ancestor_matches_a_fresh_scan() {
+    pair_matches_a_fresh_scan(|paths| {
+        (
+            subtree(&paths.home.join("docs/sub"), 1),
+            change(&paths.home.join("docs"), 2),
+        )
+    });
+}
+
+#[test]
+fn an_ancestor_one_level_due_first_then_its_descendant_subtree_matches_a_fresh_scan() {
+    pair_matches_a_fresh_scan(|paths| {
+        (
+            change(&paths.home.join("docs"), 1),
+            subtree(&paths.home.join("docs/sub"), 2),
+        )
+    });
 }

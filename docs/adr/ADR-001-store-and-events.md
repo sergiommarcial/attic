@@ -15,12 +15,15 @@ the disk changes, the app when it moves something to the Trash.
   above `min_file_size`; a folder's `size` and `files` cover everything below
   it. Every write (`replace_subtree`, `remove_subtree`, `put_entry`) moves the
   totals of all folders above by the difference, so no write ever re-sums a
-  tree. Paths are raw bytes; descendants are a byte range, never `LIKE`.
+  tree. The same writes raise those folders' newest change time to the new
+  row's when it is later; a removal leaves it alone (too new only delays a
+  cleanup, and a removal bumps its own folder's time anyway). Paths are raw bytes; descendants are a byte range, never `LIKE`.
 - The service applies FSEvents batches. It reads the disk first (full scans of
   new folders, one-level rescans of changed ones) and then writes everything
   in one short `BEGIN IMMEDIATE` transaction, so a long scan never holds the
   lock the app needs. Changes to one folder in a batch merge, a subtree change
-  winning.
+  winning. Events wait in a pending map first and a folder is applied once
+  it is quiet or has waited a minute ([ADR-005](ADR-005-coalescing-rescans.md)).
 - A hard-linked file counts `allocated / nlink` in each link's folder, the same
   in a full scan and a one-level rescan, so totals never depend on walk order.
 - On start and after a config change the service reconciles: scans roots

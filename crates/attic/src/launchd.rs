@@ -12,8 +12,9 @@ use crate::commands::full_disk_access_hint;
 pub const LABEL: &str = "local.attic.daemon";
 
 /// The labels the service may run under: `attic install`'s, and the one
-/// `brew services` gives it.
-pub const SERVICE_LABELS: [&str; 2] = [LABEL, "homebrew.mxcl.attic"];
+/// `brew services` gives it (`homebrew.mxcl.attic` before Homebrew 7,
+/// `sh.brew.attic` since).
+pub const SERVICE_LABELS: [&str; 3] = [LABEL, "homebrew.mxcl.attic", "sh.brew.attic"];
 
 const BOOTSTRAP_ATTEMPTS: u32 = 5;
 const BOOTSTRAP_DELAY: Duration = Duration::from_millis(500);
@@ -281,10 +282,10 @@ mod tests {
     }
 
     #[test]
-    fn both_service_names_count_as_the_service() {
+    fn every_homebrew_service_name_counts_as_the_service() {
         assert_eq!(
             SERVICE_LABELS,
-            ["local.attic.daemon", "homebrew.mxcl.attic"]
+            ["local.attic.daemon", "homebrew.mxcl.attic", "sh.brew.attic"]
         );
     }
 
