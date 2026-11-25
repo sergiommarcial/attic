@@ -246,10 +246,11 @@ minutes.
 
 ### Releasing
 
-Bump `version` in `Cargo.toml` and run `cargo check` so `Cargo.lock` follows,
-commit both and push to `main`, then push a tag `vX.Y.Z` matching it. The
-release workflow checks the tag, runs the checks, creates the GitHub release
-and updates the formula in
+Bump `version` in `Cargo.toml` and run `cargo check` so `Cargo.lock` follows.
+Run `make bench BASE=<previous tag>` and turn the performance tables above
+into a column for the new version. Merge all of that as a pull request, then
+push a tag `vX.Y.Z` matching the version. The release workflow checks the tag,
+runs the checks, creates the GitHub release and updates the formula in
 [homebrew-attic](https://github.com/sergiommarcial/homebrew-attic).
 
 ## Contributing and security

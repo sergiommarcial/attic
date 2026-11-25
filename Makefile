@@ -31,6 +31,7 @@ demos: ## Regenerate the README demo SVGs and GIFs (macOS: needs magick and ffmp
 	python3 scripts/demos/render.py docs/media $(SCENE)
 
 check-benches: ## Format, lint and test the benchmark programs
+	python3 benches/compare.py --sync-lock
 	cargo fmt --manifest-path benches/Cargo.toml --check
 	cargo clippy --manifest-path benches/Cargo.toml --all-targets --locked --target-dir target -- -D warnings
 	python3 -m unittest discover -s benches -p 'test_*.py'

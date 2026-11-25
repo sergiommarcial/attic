@@ -1,6 +1,8 @@
 import pathlib
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import compare  # noqa: E402
@@ -52,6 +54,31 @@ class CompareTest(unittest.TestCase):
     def test_a_base_just_above_the_floor_has_a_ratio(self):
         out = compare.table([{"kind": "stress", "what": "x", "base": 0.5, "new": 1.0}], "b")
         self.assertIn("x2.00", out)
+
+
+class LockTest(unittest.TestCase):
+    def tree(self, tmp):
+        root = pathlib.Path(tmp)
+        (root / "benches").mkdir()
+        (root / "Cargo.lock").write_text("root lock\n")
+        (root / "benches" / "Cargo.lock").write_text("stale lock\n")
+        return root
+
+    def test_the_benches_lock_is_made_from_the_root_lock(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(compare.subprocess, "run") as run:
+            root = self.tree(tmp)
+            compare.sync_lock(root)
+            self.assertEqual((root / "benches" / "Cargo.lock").read_text(), "root lock\n")
+            cmd = run.call_args.args[0]
+            self.assertEqual(cmd[:2], ["cargo", "metadata"])
+            self.assertIn(str(root / "benches/Cargo.toml"), cmd)
+
+    def test_a_build_syncs_the_lock_before_cargo_builds(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(compare.subprocess, "run") as run:
+            root = self.tree(tmp)
+            compare.build(root, root / "target")
+            self.assertEqual([c.args[0][1] for c in run.call_args_list], ["metadata", "build"])
+            self.assertEqual((root / "benches" / "Cargo.lock").read_text(), "root lock\n")
 
 
 if __name__ == "__main__":
