@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
 /// How deep below a suggestion to look for git repositories.
@@ -15,7 +15,9 @@ pub trait Probe {
     /// When the path was last used, as unix seconds, if anything knows.
     fn last_used(&self, path: &Path) -> Option<i64>;
     /// Whether a git repository at or up to three levels below `path` has
-    /// uncommitted changes or commits not on its upstream.
+    /// uncommitted changes, a stash, or commits on any local branch that no
+    /// remote has, or `path` sits inside a repository and has changed or
+    /// untracked files there.
     fn repo_has_unsaved_work(&self, path: &Path) -> bool;
 }
 
@@ -40,6 +42,7 @@ impl Probe for SystemProbe {
         let mut repos = Vec::new();
         find_repos(path, REPO_SEARCH_DEPTH, &mut repos);
         repos.iter().any(|repo| unsaved(repo))
+            || enclosing_repo(path).is_some_and(|repo| path_unsaved(repo, path))
     }
 }
 
@@ -152,32 +155,68 @@ fn find_repos(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Unknown counts as unsaved: a warning that is wrong costs a keypress, a
-/// missing one can cost work.
-fn unsaved(repo: &Path) -> bool {
-    // No optional locks: `status` must not rewrite `.git/index` (which would
-    // make the repo look used). No fsmonitor: a repo's own config must not
-    // get to run a program just because attic looked at it.
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .args(["-c", "core.fsmonitor=false", "-C"])
-            .arg(repo)
-            .args(args)
-            .output()
-            .ok()
-    };
-    let Some(status) = git(&["status", "--porcelain"]) else {
+/// Runs `git` in `repo`. No optional locks: `status` must not rewrite
+/// `.git/index` (which would make the repo look used). No fsmonitor: a
+/// repo's own config must not get to run a program just because attic
+/// looked at it. Literal pathspecs: a folder called `keep*` is that folder,
+/// not a pattern.
+fn git(repo: &Path, args: &[&str]) -> Option<Output> {
+    Command::new("git")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .args(["--literal-pathspecs", "-c", "core.fsmonitor=false", "-C"])
+        .arg(repo)
+        .args(args)
+        .output()
+        .ok()
+}
+
+/// Whether `git args` prints something. Unknown (git failed) counts as yes:
+/// a warning that is wrong costs a keypress, a missing one can cost work.
+fn prints(repo: &Path, args: &[&str]) -> bool {
+    git(repo, args).is_none_or(|o| !o.status.success() || !o.stdout.is_empty())
+}
+
+/// The nearest repository above `path`, if `path` sits inside one.
+fn enclosing_repo(path: &Path) -> Option<&Path> {
+    path.ancestors()
+        .skip(1)
+        .find(|dir| dir.join(".git").exists())
+}
+
+/// Whether anything under `path` is changed or untracked (and not ignored)
+/// in the repository around it. Stashes and unpushed branches are about the
+/// whole repo and say nothing about what is lost by moving one folder.
+fn path_unsaved(repo: &Path, path: &Path) -> bool {
+    let Some(path) = path.to_str() else {
         return true;
     };
-    if !status.status.success() || !status.stdout.is_empty() {
+    prints(repo, &["status", "--porcelain", "--", path])
+}
+
+fn unsaved(repo: &Path) -> bool {
+    // Changes, stashes (invisible to `status`), and commits on any local
+    // branch that no remote has.
+    if prints(repo, &["status", "--porcelain"])
+        || prints(repo, &["stash", "list"])
+        || prints(
+            repo,
+            &[
+                "log",
+                "--branches",
+                "--not",
+                "--remotes",
+                "-1",
+                "--format=%H",
+            ],
+        )
+    {
         return true;
     }
-    let has_commits =
-        git(&["rev-parse", "--verify", "-q", "HEAD"]).is_some_and(|o| o.status.success());
-    match git(&["rev-list", "--count", "@{u}..HEAD"]) {
+    match git(repo, &["rev-list", "--count", "@{u}..HEAD"]) {
         Some(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim() != "0",
-        _ => has_commits,
+        _ => {
+            git(repo, &["rev-parse", "--verify", "-q", "HEAD"]).is_some_and(|o| o.status.success())
+        }
     }
 }
 
@@ -304,6 +343,127 @@ mod tests {
         git(&work, &["add", "b.txt"]);
         git(&work, &["commit", "-q", "-m", "b"]);
         assert!(SystemProbe.repo_has_unsaved_work(&work));
+    }
+
+    /// A commit on a new local branch, then back on `main`.
+    fn commit_on_other_branch(work: &Path, branch: &str) {
+        git(work, &["checkout", "-q", "-b", branch]);
+        std::fs::write(work.join("c.txt"), b"c").unwrap();
+        git(work, &["add", "c.txt"]);
+        git(work, &["commit", "-q", "-m", "c"]);
+        git(work, &["checkout", "-q", "main"]);
+    }
+
+    #[test]
+    fn unpushed_commit_on_another_branch_is_unsaved() {
+        let (_dir, work) = synced_repo();
+        commit_on_other_branch(&work, "feature");
+        assert!(SystemProbe.repo_has_unsaved_work(&work));
+    }
+
+    #[test]
+    fn pushed_other_branch_is_saved() {
+        let (_dir, work) = synced_repo();
+        commit_on_other_branch(&work, "feature");
+        git(&work, &["push", "-q", "-u", "origin", "feature"]);
+        assert!(!SystemProbe.repo_has_unsaved_work(&work));
+    }
+
+    #[test]
+    fn stash_is_unsaved_until_dropped() {
+        let (_dir, work) = synced_repo();
+        std::fs::write(work.join("a.txt"), b"changed").unwrap();
+        git(&work, &["stash", "push", "-q"]);
+        assert!(SystemProbe.repo_has_unsaved_work(&work));
+        git(&work, &["stash", "drop", "-q"]);
+        assert!(!SystemProbe.repo_has_unsaved_work(&work));
+    }
+
+    /// Commits and pushes `files` (paths relative to `work`).
+    fn push_files(work: &Path, files: &[(&str, &str)]) {
+        for (name, body) in files {
+            let file = work.join(name);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, body).unwrap();
+            git(work, &["add", name]);
+        }
+        git(work, &["commit", "-q", "-m", "files"]);
+        git(work, &["push", "-q"]);
+    }
+
+    #[test]
+    fn untracked_folder_inside_a_repo_is_unsaved() {
+        let (_dir, work) = synced_repo();
+        std::fs::create_dir_all(work.join("data")).unwrap();
+        std::fs::write(work.join("data/f.txt"), b"f").unwrap();
+        assert!(SystemProbe.repo_has_unsaved_work(&work.join("data")));
+    }
+
+    #[test]
+    fn folder_name_with_glob_characters_is_matched_literally() {
+        let (_dir, work) = synced_repo();
+        let folder = work.join("Footage [2023]*");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("f.txt"), b"f").unwrap();
+        assert!(SystemProbe.repo_has_unsaved_work(&folder));
+    }
+
+    #[test]
+    fn glob_characters_do_not_match_siblings() {
+        let (_dir, work) = synced_repo();
+        push_files(&work, &[("keep*/f.txt", "f")]);
+        std::fs::create_dir_all(work.join("keep2")).unwrap();
+        std::fs::write(work.join("keep2/x.txt"), b"x").unwrap();
+        assert!(!SystemProbe.repo_has_unsaved_work(&work.join("keep*")));
+    }
+
+    #[test]
+    fn modified_tracked_file_inside_a_repo_is_unsaved() {
+        let (_dir, work) = synced_repo();
+        std::fs::write(work.join("a.txt"), b"changed").unwrap();
+        assert!(SystemProbe.repo_has_unsaved_work(&work.join("a.txt")));
+    }
+
+    #[test]
+    fn clean_tracked_folder_inside_a_repo_is_saved() {
+        let (_dir, work) = synced_repo();
+        push_files(&work, &[("docs/d.txt", "d")]);
+        assert!(!SystemProbe.repo_has_unsaved_work(&work.join("docs")));
+    }
+
+    #[test]
+    fn changes_elsewhere_in_the_repo_do_not_warn() {
+        let (_dir, work) = synced_repo();
+        push_files(&work, &[("docs/d.txt", "d")]);
+        std::fs::create_dir_all(work.join("other")).unwrap();
+        std::fs::write(work.join("other/x.txt"), b"x").unwrap();
+        assert!(!SystemProbe.repo_has_unsaved_work(&work.join("docs")));
+    }
+
+    #[test]
+    fn repo_wide_state_does_not_warn_for_a_folder_inside() {
+        let (_dir, work) = synced_repo();
+        push_files(&work, &[("docs/d.txt", "d")]);
+        commit_on_other_branch(&work, "feature");
+        std::fs::write(work.join("a.txt"), b"changed").unwrap();
+        git(&work, &["stash", "push", "-q"]);
+        assert!(!SystemProbe.repo_has_unsaved_work(&work.join("docs")));
+    }
+
+    #[test]
+    fn ignored_folder_inside_a_repo_is_saved() {
+        let (_dir, work) = synced_repo();
+        push_files(&work, &[(".gitignore", "node_modules/\n")]);
+        std::fs::create_dir_all(work.join("node_modules")).unwrap();
+        std::fs::write(work.join("node_modules/f.js"), b"f").unwrap();
+        assert!(!SystemProbe.repo_has_unsaved_work(&work.join("node_modules")));
+    }
+
+    #[test]
+    fn empty_repo_is_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-q"]);
+        assert!(!SystemProbe.repo_has_unsaved_work(dir.path()));
     }
 
     #[test]

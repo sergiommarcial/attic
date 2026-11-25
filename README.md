@@ -104,11 +104,14 @@ When most of a folder's size sits in one subfolder, the subfolder is
 suggested instead, and a folder you used this week gives way to the old
 things inside it. The Trash and attic's own folder are never scanned.
 
-Some suggestions carry a `!`: a git repository with uncommitted or unpushed
-work, a macOS library (Photos, Mail, Messages), or something used in the last
-week. Cleaning one of those asks twice. Build output and caches that their
+Some suggestions carry a `!`: a git repository with uncommitted, stashed or
+unpushed work (on any branch, or changes inside the folder when it sits in a
+repository), a macOS library (Photos, Mail, Messages), or something used in
+the last week. Cleaning one of those asks twice. Build output and caches that their
 tools rebuild (`target/` folders, `node_modules`, `.venv`, `~/Library/Caches`)
-are tagged `rebuildable`.
+are tagged `rebuildable`. git can't tell other ignored files you may care
+about (a `.env`, a local database) from build output, so cleaning a whole
+repository doesn't warn about them.
 
 "Could free" is the total of the suggestions shown. Moving things to the
 Trash frees nothing until the Trash is emptied, and Time Machine's local
@@ -127,6 +130,37 @@ you last cleaned up). Clicking it does nothing yet; run `attic` to review.
 The service waits for a changing folder to go quiet before it reads it again,
 so sizes can trail the disk by about 5 seconds, and by up to a minute for a
 folder that never stops changing (a build in progress, say).
+
+## Performance
+
+Checking a suggestion for unsaved git work is the only part of attic that
+shells out, and it runs for the suggestions shown, not for every file (the
+app keeps the answer for 5 minutes, and the service never does it). Times are
+medians on one Mac, on synthetic repos in a temp folder, old and new code run
+alternately. Each `git` call costs about 7 ms, so the figures are mostly a
+count of calls. `next` is the unreleased code; a new column is added at each
+release that changes these numbers.
+
+| Check for one suggestion | 0.1.0 | next |
+|---|---|---|
+| **Typical:** project, 2k files, 10 branches, clean | 24 ms | 31 ms |
+| **Typical:** same project, one untracked file | 27 ms | 26 ms |
+| **Typical:** ignored `node_modules` (10k files) inside a repo | 15 ms, no check | 21 ms |
+| **Typical:** folder holding 5 clean projects | 205 ms | 240 ms |
+| **Typical:** plain folder, 500 files, no repo | 0.4 ms | 0.4 ms |
+| Stress: clean repo, 20k files | 72 ms | 77 ms |
+| Stress: dirty repo, 20k files | 69 ms | 69 ms |
+| Stress: clean repo, 300 branches | 22 ms | 38 ms |
+| Stress: clean repo, 1000 branches | 22 ms | 63 ms |
+| Stress: folder holding 40 clean repos | 2.1 s | 2.3 s |
+| Stress: 100k files, no repo | 68 ms | 67 ms |
+| Stress: folder inside a repo, 20k untracked files | no check | 26 ms |
+| Stress: clean tracked folder inside a repo | no check | 14 ms |
+
+The "inside a repo" rows are new: 0.1.0 never looked at the repository around
+a suggestion (it did the same directory walk, about 15 ms for 10k files). The
+method and the reasoning are in
+[ADR-003](docs/adr/ADR-003-suggestion-selection.md).
 
 ## Config
 
