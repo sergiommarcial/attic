@@ -18,6 +18,30 @@ It has two parts in one binary:
 
 macOS only.
 
+## What it looks like
+
+The paths and sizes below are made up; the screens are the real ones.
+
+**Find what takes the space.** The app opens at once, lists the largest
+folders and lets you open them. `Tab` jumps to what attic suggests cleaning.
+
+![Opening attic, browsing the largest folders, then the suggestions](docs/media/1-find-what-takes-space.gif)
+
+**Clean up, with one confirmation.** `c` asks first, and the item goes to the
+Trash through Finder, so "Put Back" works.
+
+![Moving a node_modules folder to the Trash and the total dropping from 47 GB to 44 GB](docs/media/2-clean-up-safely.gif)
+
+**Work that exists nowhere else gets a warning.** A git repository with
+unpushed work asks twice, and any key but `y` cancels.
+
+![Cleaning a git repository with unpushed work asks for two confirmations, then is cancelled](docs/media/3-warns-before-losing-work.gif)
+
+**It tells you when there is something to clean.** The background service
+sends at most one notification a day. Run `attic` to review.
+
+![A notification saying about 28 GB could be freed, then the app listing it](docs/media/4-notices-in-the-background.gif)
+
 ## Install
 
 With Homebrew:
