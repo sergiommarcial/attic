@@ -29,3 +29,6 @@ CLAUDE.md
 # Local design notes and agent working files, kept out of the repo
 docs/superpowers/
 .superpowers/
+
+# Python bytecode from scripts/demos
+__pycache__/
