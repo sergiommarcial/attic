@@ -144,6 +144,27 @@ Sizes take `kB`, `MB`, `GB` or `TB` (decimal, as Finder counts) or a plain
 number of bytes. The service picks up changes on its own: new roots are
 scanned, removed roots and newly excluded folders dropped.
 
+## Scan speed
+
+A scan reads every folder and file once. The first scan of a large home folder
+takes the longest; after that the service only rescans what changed. Wall
+times below are medians on one Mac, warm cache, on synthetic trees in a temp
+folder, old and new code run alternately. A cold disk is slower and gains
+less. `next` is the unreleased code; a new column is added at each release
+that changes these numbers.
+
+| Scan | 0.1.0 | next |
+|---|---|---|
+| **Typical:** project, 3k files | 4.4 ms | 2.7 ms |
+| **Typical:** home-like tree, 146k files | 329 ms | 158 ms |
+| Stress: same tree, every file a row | 342 ms | 162 ms |
+| Stress: 400 folders, 8k files | 20 ms | 10 ms |
+| Stress: one folder with 100k files | 319 ms | 315 ms |
+
+The speedup comes from reading file sizes on the walker's worker threads
+([ADR-006](docs/adr/ADR-006-stat-on-worker-threads.md)). CPU time goes up by
+about a fifth, and a single huge folder doesn't get faster.
+
 ## Files
 
 - `~/Library/Application Support/attic/attic.db`: what the scans found.

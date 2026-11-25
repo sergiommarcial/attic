@@ -7,7 +7,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use jwalk::WalkDir;
+use jwalk::WalkDirGeneric;
 
 use crate::Config;
 use crate::Result;
@@ -47,6 +47,24 @@ struct Dir {
     flags: Flags,
 }
 
+/// What the scan needs from `lstat`. It is read on the walker's worker
+/// threads, so the consuming loop never waits on a syscall per entry.
+#[derive(Debug, Clone, Copy)]
+struct Stat {
+    is_dir: bool,
+    size: u64,
+    mtime: i64,
+}
+
+fn stat(path: &Path) -> Option<Stat> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    Some(Stat {
+        is_dir: meta.is_dir(),
+        size: file_size(&meta),
+        mtime: meta.mtime(),
+    })
+}
+
 /// Walks `root` and returns one entry per folder and one per file of at
 /// least `cfg.min_file_size`, with folder totals filled in. Symlinks are not
 /// followed, a hard-linked file is split between its links, system folders and `cfg.excludes` are
@@ -76,7 +94,7 @@ pub fn scan_with_progress(
         return Ok(Vec::new());
     }
     let excludes = cfg.excludes.clone();
-    let walk = WalkDir::new(root)
+    let walk = WalkDirGeneric::<((), Option<Stat>)>::new(root)
         .follow_links(false)
         .skip_hidden(false)
         .sort(false)
@@ -85,6 +103,11 @@ pub fn scan_with_progress(
                 Ok(e) => !skipped_by(&e.parent_path.join(&e.file_name), &excludes),
                 Err(_) => true,
             });
+            for child in children.iter_mut().flatten() {
+                if !child.file_type.is_symlink() {
+                    child.client_state = stat(&child.parent_path.join(&child.file_name));
+                }
+            }
         });
 
     let mut dirs: HashMap<PathBuf, Dir> = HashMap::new();
@@ -104,13 +127,17 @@ pub fn scan_with_progress(
             continue;
         }
         let path = entry.path();
-        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+        // The root is nobody's child, so it is the one entry read here.
+        let Some(meta) = entry
+            .client_state
+            .or_else(|| if entry.depth == 0 { stat(&path) } else { None })
+        else {
             continue;
         };
         let parent = path.parent().map(Path::to_path_buf);
         let name = entry.file_name.as_os_str();
 
-        if meta.is_dir() {
+        if meta.is_dir {
             if name == ".git"
                 && let Some(p) = parent.as_ref().and_then(|p| dirs.get_mut(p))
             {
@@ -119,7 +146,7 @@ pub fn scan_with_progress(
             state.dirs += 1;
             state.current = path.clone();
             let mut dir = Dir {
-                newest_mtime: meta.mtime(),
+                newest_mtime: meta.mtime,
                 ..Dir::default()
             };
             if let Some(err) = entry.read_children.as_ref().and_then(|r| r.error())
@@ -131,12 +158,12 @@ pub fn scan_with_progress(
             }
             dirs.insert(path, dir);
         } else {
-            let size = file_size(&meta);
+            let size = meta.size;
             state.bytes += size;
             if let Some(p) = parent.as_ref().and_then(|p| dirs.get_mut(p)) {
                 p.files += 1;
                 p.size += size;
-                p.newest_mtime = p.newest_mtime.max(meta.mtime());
+                p.newest_mtime = p.newest_mtime.max(meta.mtime);
                 if name == "CACHEDIR.TAG" {
                     p.flags.insert(Flags::CACHEDIR);
                 }
@@ -153,7 +180,7 @@ pub fn scan_with_progress(
                     files: 1,
                     small_files: 0,
                     small_bytes: 0,
-                    newest_mtime: meta.mtime(),
+                    newest_mtime: meta.mtime,
                     last_used: None,
                     flags: Flags::empty(),
                 });
