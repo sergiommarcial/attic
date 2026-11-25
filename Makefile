@@ -6,7 +6,7 @@ export RUSTUP_TOOLCHAIN ?= stable
 
 TESTS ?=
 
-.PHONY: help build test test-fast test-scripts check-formula clippy fmt fmt-check deny machete lint-ci ci install install-tools
+.PHONY: help build test test-fast test-scripts check-benches bench check-formula clippy fmt fmt-check deny machete lint-ci ci install install-tools
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -22,6 +22,14 @@ test-fast: ## Unit tests plus the integration files in TESTS ("store scan")
 
 test-scripts: ## Test the release scripts
 	sh scripts/test-release-scripts.sh
+
+check-benches: ## Format, lint and test the benchmark programs
+	cargo fmt --manifest-path benches/Cargo.toml --check
+	cargo clippy --manifest-path benches/Cargo.toml --all-targets --locked --target-dir target -- -D warnings
+	python3 -m unittest discover -s benches -p 'test_*.py'
+
+bench: ## Measure speed on synthetic trees; BASE=origin/main compares against a ref
+	python3 benches/compare.py $(BASE) $(ARGS)
 
 check-formula: ## Style and audit the Homebrew formula in a throwaway tap
 	sh scripts/check-formula.sh
@@ -45,7 +53,7 @@ lint-ci: ## Lint the workflows and scripts
 	actionlint
 	shellcheck scripts/*.sh
 
-ci: fmt-check clippy test test-scripts check-formula lint-ci deny machete ## What CI would run
+ci: fmt-check clippy test test-scripts check-benches check-formula lint-ci deny machete ## What CI would run
 
 install: ## Install the attic binary into ~/.cargo/bin
 	cargo install --path crates/attic --locked

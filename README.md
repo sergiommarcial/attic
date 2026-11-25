@@ -228,10 +228,15 @@ cargo uninstall attic
 ## Development
 
 `make help` lists the targets; `make ci` runs formatting, clippy, the tests,
-the release script tests, actionlint, shellcheck, cargo-deny and
-cargo-machete (`make install-tools` installs the tools). GitHub Actions runs
+the release script tests, the benchmark checks, actionlint, shellcheck,
+cargo-deny and cargo-machete (`make install-tools` installs the tools). GitHub Actions runs
 the same checks on every push and pull request. Tests never touch your real
 home folder or Trash. Design decisions are in `docs/adr/`.
+
+`make bench` measures speed on synthetic trees in a temp folder, and
+`make bench BASE=origin/main` compares the current code against another git
+ref, printing a markdown table (see `benches/compare.py`). It takes a few
+minutes.
 
 ### Releasing
 
