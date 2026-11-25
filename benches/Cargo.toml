@@ -1,0 +1,17 @@
+[package]
+name = "attic-bench"
+description = "Benchmarks for attic: synthetic trees, old code against new"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+publish = false
+
+# Its own workspace, so building attic never builds the benchmarks and the
+# main Cargo.lock doesn't carry their dependencies. benches/Cargo.lock is
+# generated from the root one (compare.py --sync-lock), not committed.
+[workspace]
+
+[dependencies]
+attic-core = { path = "../crates/attic-core" }
+libc = "0.2.191"

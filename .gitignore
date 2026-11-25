@@ -29,3 +29,9 @@ CLAUDE.md
 # Local design notes and agent working files, kept out of the repo
 docs/superpowers/
 .superpowers/
+
+# Python bytecode from scripts/demos
+__pycache__/
+
+# Made from the root Cargo.lock by benches/compare.py
+benches/Cargo.lock

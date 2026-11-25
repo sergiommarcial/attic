@@ -18,6 +18,30 @@ It has two parts in one binary:
 
 macOS only.
 
+## What it looks like
+
+The paths and sizes below are made up; the screens are the real ones.
+
+**Find what takes the space.** The app opens at once, lists the largest
+folders and lets you open them. `Tab` jumps to what attic suggests cleaning.
+
+![Opening attic, browsing the largest folders, then the suggestions](docs/media/1-find-what-takes-space.gif)
+
+**Clean up, with one confirmation.** `c` asks first, and the item goes to the
+Trash through Finder, so "Put Back" works.
+
+![Moving a node_modules folder to the Trash and the total dropping from 47 GB to 44 GB](docs/media/2-clean-up-safely.gif)
+
+**Work that exists nowhere else gets a warning.** A git repository with
+unpushed work asks twice, and any key but `y` cancels.
+
+![Cleaning a git repository with unpushed work asks for two confirmations, then is cancelled](docs/media/3-warns-before-losing-work.gif)
+
+**It tells you when there is something to clean.** The background service
+sends at most one notification a day. Run `attic` to review.
+
+![A notification saying about 28 GB could be freed, then the app listing it](docs/media/4-notices-in-the-background.gif)
+
 ## Install
 
 With Homebrew:
@@ -80,11 +104,14 @@ When most of a folder's size sits in one subfolder, the subfolder is
 suggested instead, and a folder you used this week gives way to the old
 things inside it. The Trash and attic's own folder are never scanned.
 
-Some suggestions carry a `!`: a git repository with uncommitted or unpushed
-work, a macOS library (Photos, Mail, Messages), or something used in the last
-week. Cleaning one of those asks twice. Build output and caches that their
+Some suggestions carry a `!`: a git repository with uncommitted, stashed or
+unpushed work (on any branch, or changes inside the folder when it sits in a
+repository), a macOS library (Photos, Mail, Messages), or something used in
+the last week. Cleaning one of those asks twice. Build output and caches that their
 tools rebuild (`target/` folders, `node_modules`, `.venv`, `~/Library/Caches`)
-are tagged `rebuildable`.
+are tagged `rebuildable`. git can't tell other ignored files you may care
+about (a `.env`, a local database) from build output, so cleaning a whole
+repository doesn't warn about them.
 
 "Could free" is the total of the suggestions shown. Moving things to the
 Trash frees nothing until the Trash is emptied, and Time Machine's local
@@ -104,6 +131,37 @@ The service waits for a changing folder to go quiet before it reads it again,
 so sizes can trail the disk by about 5 seconds, and by up to a minute for a
 folder that never stops changing (a build in progress, say).
 
+## Performance
+
+Checking a suggestion for unsaved git work is the only part of attic that
+shells out, and it runs for the suggestions shown, not for every file (the
+app keeps the answer for 5 minutes, and the service never does it). Times are
+medians on one Mac, on synthetic repos in a temp folder, old and new code run
+alternately. Each `git` call costs about 7 ms, so the figures are mostly a
+count of calls. `next` is the unreleased code; a new column is added at each
+release that changes these numbers.
+
+| Check for one suggestion | 0.1.0 | next |
+|---|---|---|
+| **Typical:** project, 2k files, 10 branches, clean | 24 ms | 31 ms |
+| **Typical:** same project, one untracked file | 27 ms | 26 ms |
+| **Typical:** ignored `node_modules` (10k files) inside a repo | 15 ms, no check | 21 ms |
+| **Typical:** folder holding 5 clean projects | 205 ms | 240 ms |
+| **Typical:** plain folder, 500 files, no repo | 0.4 ms | 0.4 ms |
+| Stress: clean repo, 20k files | 72 ms | 77 ms |
+| Stress: dirty repo, 20k files | 69 ms | 69 ms |
+| Stress: clean repo, 300 branches | 22 ms | 38 ms |
+| Stress: clean repo, 1000 branches | 22 ms | 63 ms |
+| Stress: folder holding 40 clean repos | 2.1 s | 2.3 s |
+| Stress: 100k files, no repo | 68 ms | 67 ms |
+| Stress: folder inside a repo, 20k untracked files | no check | 26 ms |
+| Stress: clean tracked folder inside a repo | no check | 14 ms |
+
+The "inside a repo" rows are new: 0.1.0 never looked at the repository around
+a suggestion (it did the same directory walk, about 15 ms for 10k files). The
+method and the reasoning are in
+[ADR-003](docs/adr/ADR-003-suggestion-selection.md).
+
 ## Config
 
 `~/.config/attic/config.toml` is optional. Every key has a default:
@@ -119,6 +177,27 @@ notify_max_per_day = 1      # 0 turns notifications off
 Sizes take `kB`, `MB`, `GB` or `TB` (decimal, as Finder counts) or a plain
 number of bytes. The service picks up changes on its own: new roots are
 scanned, removed roots and newly excluded folders dropped.
+
+## Scan speed
+
+A scan reads every folder and file once. The first scan of a large home folder
+takes the longest; after that the service only rescans what changed. Wall
+times below are medians on one Mac, warm cache, on synthetic trees in a temp
+folder, old and new code run alternately. A cold disk is slower and gains
+less. `next` is the unreleased code; a new column is added at each release
+that changes these numbers.
+
+| Scan | 0.1.0 | next |
+|---|---|---|
+| **Typical:** project, 3k files | 4.4 ms | 2.7 ms |
+| **Typical:** home-like tree, 146k files | 329 ms | 158 ms |
+| Stress: same tree, every file a row | 342 ms | 162 ms |
+| Stress: 400 folders, 8k files | 20 ms | 10 ms |
+| Stress: one folder with 100k files | 319 ms | 315 ms |
+
+The speedup comes from reading file sizes on the walker's worker threads
+([ADR-006](docs/adr/ADR-006-stat-on-worker-threads.md)). CPU time goes up by
+about a fifth, and a single huge folder doesn't get faster.
 
 ## Files
 
@@ -149,17 +228,29 @@ cargo uninstall attic
 ## Development
 
 `make help` lists the targets; `make ci` runs formatting, clippy, the tests,
-the release script tests, actionlint, shellcheck, cargo-deny and
-cargo-machete (`make install-tools` installs the tools). GitHub Actions runs
-the same checks on every push and pull request. Tests never touch your real
-home folder or Trash. Design decisions are in `docs/adr/`.
+the release script tests, the demo and benchmark checks, actionlint,
+shellcheck, cargo-deny and cargo-machete (`make install-tools` installs the
+tools). GitHub Actions runs the same checks on every push and pull request.
+Tests never touch your real home folder or Trash. Design decisions are in
+`docs/adr/`.
+
+The demos at the top of this page are drawn by `scripts/demos/` from made-up
+data. `make check-demos` (part of `make ci`) fails when a demo's text no
+longer matches the app, and `make demos` redraws them (macOS, needs
+ImageMagick and ffmpeg).
+
+`make bench` measures speed on synthetic trees in a temp folder, and
+`make bench BASE=origin/main` compares the current code against another git
+ref, printing a markdown table (see `benches/compare.py`). It takes a few
+minutes.
 
 ### Releasing
 
-Bump `version` in `Cargo.toml` and run `cargo check` so `Cargo.lock` follows,
-commit both and push to `main`, then push a tag `vX.Y.Z` matching it. The
-release workflow checks the tag, runs the checks, creates the GitHub release
-and updates the formula in
+Bump `version` in `Cargo.toml` and run `cargo check` so `Cargo.lock` follows.
+Run `make bench BASE=<previous tag>` and turn the performance tables above
+into a column for the new version. Merge all of that as a pull request, then
+push a tag `vX.Y.Z` matching the version. The release workflow checks the tag,
+runs the checks, creates the GitHub release and updates the formula in
 [homebrew-attic](https://github.com/sergiommarcial/homebrew-attic).
 
 ## Contributing and security

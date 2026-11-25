@@ -254,7 +254,9 @@ fn dialog(frame: &mut Frame, lines: Vec<Line>) {
 
 fn warning_text(w: Warning) -> &'static str {
     match w {
-        Warning::UnsavedRepo => "Holds a git repository with uncommitted or unpushed work.",
+        Warning::UnsavedRepo => {
+            "Holds a git repository with uncommitted, stashed or unpushed work."
+        }
         Warning::LibraryBundle => "A macOS library (Photos, Mail or Messages).",
         Warning::RecentlyUsed => "Used in the last week.",
     }
