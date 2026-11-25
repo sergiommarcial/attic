@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "attic"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "attic-core",
  "clap",
@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "attic-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "core-foundation-sys",
  "jwalk",

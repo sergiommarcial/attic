@@ -136,30 +136,31 @@ folder that never stops changing (a build in progress, say).
 Checking a suggestion for unsaved git work is the only part of attic that
 shells out, and it runs for the suggestions shown, not for every file (the
 app keeps the answer for 5 minutes, and the service never does it). Times are
-medians on one Mac, on synthetic repos in a temp folder, old and new code run
-alternately. Each `git` call costs about 7 ms, so the figures are mostly a
-count of calls. `next` is the unreleased code; a new column is added at each
-release that changes these numbers.
+medians of 15 runs on one Mac, on synthetic repos in a temp folder, measured
+with `make bench BASE=v0.1.0` (see `benches/compare.py`): both versions run
+alternately, each measurement a fresh process. Each `git` call costs about
+7 ms, so the figures are mostly a count of calls. A new column is added at
+each release that changes these numbers.
 
-| Check for one suggestion | 0.1.0 | next |
+| Check for one suggestion | 0.1.0 | 0.2.0 |
 |---|---|---|
-| **Typical:** project, 2k files, 10 branches, clean | 24 ms | 31 ms |
-| **Typical:** same project, one untracked file | 27 ms | 26 ms |
-| **Typical:** ignored `node_modules` (10k files) inside a repo | 15 ms, no check | 21 ms |
-| **Typical:** folder holding 5 clean projects | 205 ms | 240 ms |
-| **Typical:** plain folder, 500 files, no repo | 0.4 ms | 0.4 ms |
-| Stress: clean repo, 20k files | 72 ms | 77 ms |
-| Stress: dirty repo, 20k files | 69 ms | 69 ms |
-| Stress: clean repo, 300 branches | 22 ms | 38 ms |
-| Stress: clean repo, 1000 branches | 22 ms | 63 ms |
-| Stress: folder holding 40 clean repos | 2.1 s | 2.3 s |
-| Stress: 100k files, no repo | 68 ms | 67 ms |
-| Stress: folder inside a repo, 20k untracked files | no check | 26 ms |
-| Stress: clean tracked folder inside a repo | no check | 14 ms |
+| **Typical:** project, 2k files, 10 branches, clean | 42.6 ms | 50.8 ms |
+| **Typical:** same project, one untracked file | 13.1 ms | 13.1 ms |
+| **Typical:** ignored `node_modules` (10k files) inside a repo | 14.1 ms | 23.0 ms |
+| **Typical:** folder holding 5 clean projects | 204 ms | 241 ms |
+| **Typical:** plain folder, 500 files, no repo | 0.5 ms | 0.4 ms |
+| Stress: clean repo, 20k files | 75.3 ms | 85.7 ms |
+| Stress: dirty repo, 20k files | 80.7 ms | 80.8 ms |
+| Stress: clean repo, 300 branches, 1000 commits | 34.9 ms | 61.0 ms |
+| Stress: clean repo, 1000 branches, 300 commits | 29.0 ms | 71.7 ms |
+| Stress: folder holding 40 clean repos | 2.2 s | 2.8 s |
+| Stress: 100k files, no repo | 67.2 ms | 67.8 ms |
+| Stress: folder inside a repo, 20k untracked files | 13.8 ms | 24.8 ms |
+| Stress: clean tracked folder inside a repo | 0.1 ms | 11.0 ms |
 
-The "inside a repo" rows are new: 0.1.0 never looked at the repository around
-a suggestion (it did the same directory walk, about 15 ms for 10k files). The
-method and the reasoning are in
+The "inside a repo" rows are new work: 0.1.0 never looked at the repository
+around a suggestion, so its column is the directory walk alone (0.1 ms is
+process noise). The method and the reasoning are in
 [ADR-003](docs/adr/ADR-003-suggestion-selection.md).
 
 ## Config
@@ -181,19 +182,17 @@ scanned, removed roots and newly excluded folders dropped.
 ## Scan speed
 
 A scan reads every folder and file once. The first scan of a large home folder
-takes the longest; after that the service only rescans what changed. Wall
-times below are medians on one Mac, warm cache, on synthetic trees in a temp
-folder, old and new code run alternately. A cold disk is slower and gains
-less. `next` is the unreleased code; a new column is added at each release
-that changes these numbers.
+takes the longest; after that the service only rescans what changed. Times are
+medians of 15 runs on one Mac, warm cache, on synthetic trees in a temp
+folder, measured the same way as above. A cold disk is slower and gains less.
 
-| Scan | 0.1.0 | next |
+| Scan | 0.1.0 | 0.2.0 |
 |---|---|---|
-| **Typical:** project, 3k files | 4.4 ms | 2.7 ms |
-| **Typical:** home-like tree, 146k files | 329 ms | 158 ms |
-| Stress: same tree, every file a row | 342 ms | 162 ms |
-| Stress: 400 folders, 8k files | 20 ms | 10 ms |
-| Stress: one folder with 100k files | 319 ms | 315 ms |
+| **Typical:** project, 3k files | 5.5 ms | 3.5 ms |
+| **Typical:** home-like tree, 146k files | 456 ms | 187 ms |
+| Stress: home-like tree, every file a row | 401 ms | 202 ms |
+| Stress: 400 folders, 8k files | 21.2 ms | 11.2 ms |
+| Stress: one folder, 100k files | 270 ms | 283 ms |
 
 The speedup comes from reading file sizes on the walker's worker threads
 ([ADR-006](docs/adr/ADR-006-stat-on-worker-threads.md)). CPU time goes up by
