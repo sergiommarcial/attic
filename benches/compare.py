@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Measures attic's speed on synthetic trees, optionally against a git ref.
 
-usage: compare.py [BASE_REF] [--runs N] [--only scan|probe]
+usage: compare.py [BASE_REF] [--runs N] [--only scan|probe] [--sync-lock]
 
 With BASE_REF (say origin/main, or the commit before a change) the script
 extracts that ref with `git archive`, builds the benchmark programs from
@@ -92,8 +92,22 @@ def run_cmd(args, **kwargs):
     return subprocess.run(args, check=True, capture_output=True, text=True, **kwargs).stdout
 
 
+def sync_lock(source):
+    """Makes benches/Cargo.lock from the checkout's own Cargo.lock, so the
+    benchmarks use the same dependency versions as attic itself and a
+    dependency bump needs no second lockfile edit. cargo prunes the copy to
+    what the benchmarks use. The file is generated, never committed."""
+    shutil.copyfile(source / "Cargo.lock", source / "benches" / "Cargo.lock")
+    subprocess.run(
+        ["cargo", "metadata", "--manifest-path", str(source / "benches/Cargo.toml"), "--format-version", "1"],
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+
+
 def build(source, target_dir):
     """Builds the benchmark programs in `source` and returns their paths."""
+    sync_lock(source)
     env = {**os.environ, "CARGO_TARGET_DIR": str(target_dir)}
     subprocess.run(
         ["cargo", "build", "--release", "--locked", "--manifest-path", str(source / "benches/Cargo.toml")],
@@ -148,7 +162,11 @@ def main():
     parser.add_argument("base", nargs="?", help="git ref to compare against")
     parser.add_argument("--runs", type=int, default=15)
     parser.add_argument("--only", choices=PROGRAMS)
+    parser.add_argument("--sync-lock", action="store_true", help="only refresh benches/Cargo.lock")
     args = parser.parse_args()
+    if args.sync_lock:
+        sync_lock(ROOT)
+        return
     programs = [args.only] if args.only else PROGRAMS
     started = time.time()
 
